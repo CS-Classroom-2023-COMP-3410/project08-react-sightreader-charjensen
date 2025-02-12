@@ -24,15 +24,25 @@
     margin-left: 0;
     margin-right: 0;
 }
-#abc-textarea-container{
+#abc-textarea-container {
     text-align: center;
+    margin: 10px auto;
+    width: 80%; /* Adjust as needed */
 }
-#abc-textarea{
-    width: 74%;
-    height: 150px;
-    font-size: initial;
-    line-height: initial;
+
+#abc-textarea {
+    width: 100%; /* Ensure it spans the full width of its container */
+    height: 150px; /* Adjust as needed for the desired height */
+    font-size: 14px; /* Reduce font size for better text fitting */
+    line-height: 1.5; /* Adjust line height to improve readability */
+    overflow: auto; /* Add scrolling if the text exceeds the height */
+    resize: vertical; /* Allow the user to resize vertically if needed */
 }
+
+.abcjs-title.abcjs-meta-top {
+    font-size: 0;
+}
+
 .controls div select, .controls div button{
     height: 30px;
     vertical-align: top;

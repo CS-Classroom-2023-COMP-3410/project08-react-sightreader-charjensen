@@ -1,6 +1,6 @@
 const ABC_EXT = '.abc';
 const PLS_EXT = '.pls';
-const Pitchfinder = require('pitchfinder');
+import * as Pitchfinder from 'pitchfinder';
 let detectPitch = null;
 // const detectPitch = new Pitchfinder.AMDF(); // .YIN() confuses B3 with B4?
 
@@ -17,7 +17,6 @@ const scales = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
 // Text variables
 let current_midi_number = 0;
 let expected_midi_number = 0;
-let current_score_stats = null;
 let scroll_offset = 0;
 let current_qpm = null;
 
@@ -58,18 +57,14 @@ const file_select = document.querySelector('#file');
 const tempo_select = document.querySelector('#tempo');
 const tune_button = document.querySelector('#tune');
 const current_note_display = document.querySelector('#current-note');
-const current_score_display = document.querySelector('#current-score');
 const countdown_display = document.querySelector('#count-down');
 const volume_display = document.querySelector('#current-volume');
 const playlist_display = document.querySelector('#playlist');
 const current_playlist_position_display = document.querySelector('#current-playlist-position');
-const score_stats_display = document.querySelector('#score-stats');
 const loaded_filename_display = document.querySelector('#loaded-filename');
 const qpm_display = document.querySelector('#qpm-display');
 const auto_continue = document.querySelector('#auto-continue');
 const ignore_duration = document.querySelector('#ignore-duration');
-const profile_select = document.querySelector('#profiles');
-const create_new_profile_input = document.querySelector('#newProfile');
 
 window.start_button = start_button;
 
@@ -85,7 +80,7 @@ function is_ignore_duration() {
     return $('#' + ignore_duration.id).is(':checked');
 }
 
-// Compare the note expected to be played against the note currently detected on the mic and update score.
+// Compare the note expected to be played against the note currently detected.
 function check_note() {
     if (isNaN(current_midi_number)) {
         current_midi_number = 0;
@@ -93,22 +88,18 @@ function check_note() {
     if (isNaN(expected_midi_number)) {
         expected_midi_number = 0;
     }
-    if(is_ignore_duration()){
+    if (is_ignore_duration()) {
         // If we're ignoring duration, then only increase our correct note count if the note is met at least once.
-        if(!new_note_checked){
+        if (!new_note_checked) {
             new_note_checked = true;
-            notes_checked_count += 1;
         }
-        if(!new_note_checked_and_found && expected_midi_number == current_midi_number){
+        if (!new_note_checked_and_found && expected_midi_number == current_midi_number) {
             new_note_checked_and_found = true;
-            notes_checked_correct_count += 1;
         }
-    }else{
+    } else {
         // Otherwise, assume the note must be met throughout the entire duration.
         notes_checked_correct_count += expected_midi_number == current_midi_number;
-        notes_checked_count += 1;
     }
-    update_score_display();
 }
 
 function is_startable() {
@@ -212,7 +203,7 @@ function refresh_countdown() {
     countdown -= 1;
     if (countdown > 0) {
         countdown_display.textContent = tunebook[0].getBeatsPerMeasure() - countdown + 1;
-        $('#count-down').css({'font-size': '15em', 'opacity' : 1.0}).show().animate({opacity: '0'}, milliseconds_per_beat(current_qpm), 'swing', refresh_countdown);
+        $('#count-down').css({ 'font-size': '15em', 'opacity': 1.0 }).show().animate({ opacity: '0' }, milliseconds_per_beat(current_qpm), 'swing', refresh_countdown);
     } else {
         $('#count-down').hide();
         if (countdown == 0) {
@@ -222,58 +213,111 @@ function refresh_countdown() {
 }
 
 function load_playlist_file(filename) {
-    $.ajax({
-        url: 'playlist/' + filename,
-        dataType: 'json',
-        success: function (data, textStatus, jqXHR) {
-            var playlist = $('#' + playlist_display.id);
-            clear_playlist();
-            playlist_files = data;
-            playlist_index = 0;
-            for (var i = 0; i < data.length; i += 1) {
-                playlist.append('<li class="list-group-item" data-playlist-index="' + i + '">' + data[i] + '</li>');
+    fetch('/music/' + filename) // Assuming the playlist file is served under /music/
+        .then(response => {
+            if (!response.ok) {
+                throw new Error('Unable to load playlist file: ' + filename);
             }
+            return response.text();
+        })
+        .then(rawData => {
+            // Preprocess the playlist data
+            const files = [];
+            const lines = rawData.split('\n');
+
+            lines.forEach(line => {
+                line = line.trim();
+                if (!line || line.startsWith('#')) {
+                    // Ignore comments or empty lines
+                    return;
+                }
+                files.push(line);
+            });
+
+            // Update the UI with the processed playlist
+            const playlist = document.getElementById(playlist_display.id);
+            clear_playlist();
+            playlist_files = files;
+            playlist_index = 0;
+
+            files.forEach((item, index) => {
+                const listItem = document.createElement('li');
+                listItem.className = 'list-group-item';
+                listItem.setAttribute('data-playlist-index', index);
+                listItem.textContent = item;
+                playlist.appendChild(listItem);
+            });
+
             if (playlist_files) {
                 update_playlist();
             }
-            $('#playlist li').click(function () {
-                var el = $(this);
-                var index = parseInt(el.data('playlist-index'));
-                // console.log('Loading index ' + index);
-                goto_playlist_index(index);
+
+            // Add click listeners to each playlist item
+            document.querySelectorAll('#playlist li').forEach(item => {
+                item.addEventListener('click', function () {
+                    const index = parseInt(this.getAttribute('data-playlist-index'));
+                    goto_playlist_index(index);
+                });
             });
-        },
-        error: function (jqXHR, textStatus, errorThrown) {
+        })
+        .catch(error => {
             report_status('Unable to load playlist file: ' + filename);
             update_start_button();
-        },
-    });
+        });
 }
 
 function load_abc_file(filename) {
-    if (!filename) {
-        return;
-    }
+    if (!filename) return;
+
     loaded_filename_display.textContent = '';
-    $.ajax({
-        url: 'abc/single/' + filename,
-        dataType: 'text',
-        success: function (data, textStatus, jqXHR) {
-            original_loaded_abc = data;
+
+    fetch('/music/' + filename)
+        .then(response => {
+            if (!response.ok) {
+                throw new Error('Unable to load file.');
+            }
+            return response.text();
+        })
+        .then(rawData => {
+            // Preprocessing logic from the backend
+            const lines = rawData.split('\n');
+            const headers = [];
+            const notes = [];
+
+            lines.forEach(line => {
+                line = line.trim();
+                if (!line || line.startsWith('%')) {
+                    // Ignore comments or empty lines
+                    return;
+                }
+                if (line.length >= 2 && line[1] === ':' && /^[A-Za-z]$/.test(line[0])) {
+                    const headerChar = line[0].toUpperCase();
+                    // Ignore meta tags like title/author/composer/etc.
+                    if (!['T', 'C', 'Z', 'S', 'N', 'G', 'O', 'H', 'I', 'P', 'W', 'F', 'B'].includes(headerChar)) {
+                        headers.push(line);
+                    }
+                } else {
+                    notes.push(line);
+                }
+            });
+
+            // Combine headers and notes into the processed data
+            const processedData = headers.join('\n') + '\n' + notes.join('\n');
+
+            // Update the UI with the processed data
+            original_loaded_abc = processedData;
             loaded_abc_filename = filename;
             loaded_filename_display.textContent = filename;
-            $('#abc-textarea').val(data);
-            load_abc(data);
-            $(file_select.id).removeAttr('disabled');
+            document.getElementById('abc-textarea').value = processedData;
+            load_abc(processedData);
+            file_select.removeAttribute('disabled');
             report_status('File loaded. Press start to play.');
             update_start_button();
-            update_score_stats_display();
-        },
-        error: function (jqXHR, textStatus, errorThrown) {
+        })
+        .catch(error => {
             report_status('Unable to load file.');
             update_start_button();
-        },
-    });
+        });
 }
 
 function load_abc_textarea() {
@@ -283,10 +327,9 @@ function load_abc_textarea() {
     load_abc(data);
     $(file_select.id).removeAttr('disabled');
 
-    if(tunebook && tunebook[0].lines.length > 0) {
+    if (tunebook && tunebook[0].lines.length > 0) {
         loaded_abc_filename = tunebook[0].metaText.title;
         report_status('File loaded. Press start to play.');
-        update_score_stats_display();
     } else {
         report_status('Invalid ABC text. Please try again.');
     }
@@ -304,7 +347,7 @@ function milliseconds_per_measure(qpm, tune) {
 
 // https://newt.phys.unsw.edu.au/jw/notes.html
 function midi_number_to_octave(number) {
-    octave = parseInt(number / 12) - 1;
+    let octave = parseInt(number / 12) - 1;
     return octave;
 }
 window.midi_number_to_octave = midi_number_to_octave;
@@ -329,7 +372,7 @@ window.noteFromPitch = noteFromPitch;
 
 function start_pitch_detector() {
     audioContext.resume();
-    detectPitch = new Pitchfinder.YIN({sampleRate : audioContext.sampleRate});
+    detectPitch = new Pitchfinder.YIN({ sampleRate: audioContext.sampleRate });
     var sourceNode = audioContext.createMediaStreamSource(source_stream);
     var analyser = audioContext.createAnalyser();
     sourceNode.connect(analyser);
@@ -442,22 +485,9 @@ function event_callback(event) {
     } else {
         // Reached the end.
         stop_note_checker();
-        var score = get_score_percent();
-        report_status('Scored ' + score + '.');
-        record_score(score);
-        update_score_stats_display();
         stop(false);
         setTimeout(reset, 100);
-        // If auto-continue is enabled and our last score was greater or equall to the average, then immediately start playing next.
-        if (is_auto_continue()) {
-            if (current_score_stats.mean_score && get_score_percent() >= current_score_stats.mean_score) {
-                console.log('Auto-incrementing playlist.');
-                increment_playlist();
-            }
-            if (!at_playlist_end() || (current_score_stats.mean_score && get_score_percent() < current_score_stats.mean_score)) {
-                setTimeout(auto_start, 3000);
-            }
-        }
+        increment_playlist();
     }
 }
 
@@ -495,34 +525,6 @@ function start() {
     synth.start();
     report_status('Playing.');
     $('#notation').css('opacity', 1);
-}
-
-function get_score_percent() {
-    return parseInt(Math.round((notes_checked_correct_count / notes_checked_count) * 100));
-}
-
-function reset_score_display_style() {
-    var el = $('#' + current_score_display.id);
-    el.removeClass('good');
-    el.removeClass('bad');
-}
-
-function update_score_display() {
-    var el = $('#' + current_score_display.id);
-    reset_score_display_style();
-    if (notes_checked_count) {
-        percent = get_score_percent();
-        el.text('' + notes_checked_correct_count + '/' + notes_checked_count + ' = ' + percent + '%');
-        if (current_score_stats && current_score_stats.mean_score) {
-            if (percent >= current_score_stats.mean_score) {
-                el.addClass('good');
-            } else {
-                el.addClass('bad');
-            }
-        }
-    } else {
-        el.text('-');
-    }
 }
 
 function stop(verbose) {
@@ -596,19 +598,6 @@ function update_current_note_display() {
 }
 window.update_current_note_display = update_current_note_display;
 
-function record_score(score) {
-    $.ajax({
-        url: 'score/set/' + loaded_abc_filename + '/' + score + '/' + current_qpm + '/' + profile_select.value,
-        dataType: 'text',
-        success: function (data, textStatus, jqXHR) {
-            console.log('Score saved!');
-        },
-        error: function (jqXHR, textStatus, errorThrown) {
-            console.log('Error saving score!');
-        },
-    });
-}
-
 function scroll_left() {
     scroll_offset -= 100;
     scroll_offset = Math.max(scroll_offset, 0);
@@ -666,9 +655,7 @@ function clear_playlist() {
 function update_playlist() {
     notes_checked_correct_count = 0;
     notes_checked_count = 0;
-    reset_score_display_style();
     reset_current_note_display_style();
-    update_score_display();
     $('li').removeClass('active');
     $('li[data-playlist-index=' + playlist_index + ']').addClass('active');
     var fn = playlist_files[playlist_index];
@@ -681,24 +668,6 @@ function update_playlist() {
 }
 window.update_playlist = update_playlist;
 
-function update_score_stats_display() {
-    $.ajax({
-        url: 'score/get/' + loaded_abc_filename + '/' + current_qpm + '/' + profile_select.value,
-        dataType: 'json',
-        success: function (data, textStatus, jqXHR) {
-            current_score_stats = data;
-            score_stats_display.textContent = '';
-            if (data.most_recent_scores.length) {
-                score_stats_display.textContent = '' + data.min_score + '/' + data.mean_score + '/' + data.max_score;
-            }
-        },
-        error: function (jqXHR, textStatus, errorThrown) {
-            console.log('Error retrieving score statistics!');
-        },
-    });
-}
-window.update_score_stats_display = update_score_stats_display;
-
 auto_continue.addEventListener('click', async (e) => {
     Cookies.set(auto_continue.id, is_auto_continue() ? 1 : 0);
 });
@@ -706,45 +675,6 @@ auto_continue.addEventListener('click', async (e) => {
 ignore_duration.addEventListener('click', async (e) => {
     Cookies.set(ignore_duration.id, is_ignore_duration() ? 1 : 0);
 });
-
-profile_select.addEventListener('change', async (e) => {
-    if(e.target.value == 'new'){
-        $('#'+profile_select.id).hide();
-        $('#'+create_new_profile_input.id).show();
-    }else{
-        Cookies.set(profile_select.id, profile_select.value);
-        $('#'+profile_select.id).show();
-        $('#'+create_new_profile_input.id).hide();
-        update_score_stats_display();
-    }
-});
-
-create_new_profile_input.addEventListener('keydown', async (e) => {
-    //console.log(event.keyCode)
-    if (event.keyCode == 27) {
-        // Escape.
-        create_new_profile_input.value = '';
-        $('#'+profile_select.id).show();
-        $('#'+create_new_profile_input.id).hide();
-    }else if (event.keyCode == 13) {
-        $.ajax({
-            url: '/profile/save/'+create_new_profile_input.value,
-            dataType: 'json',
-            success: function (data, textStatus, jqXHR) {
-                console.log('Success saving profile!');
-                $('#'+profile_select.id).append('<option value="'+create_new_profile_input.value+'">'+create_new_profile_input.value+'</option>');
-                profile_select.value = create_new_profile_input.value;
-                $('#'+profile_select.id).show();
-                create_new_profile_input.value = '';
-                $('#'+create_new_profile_input.id).hide();
-            },
-            error: function (jqXHR, textStatus, errorThrown) {
-                console.log('Error saving profile!');
-            },
-        });
-    }
-});
-
 
 // Runs whenever a different audio input device is selected by the user.
 devices_select.addEventListener('change', async (e) => {
@@ -767,11 +697,11 @@ devices_select.addEventListener('change', async (e) => {
 });
 
 navigator.getUserMedia = (navigator.getUserMedia ||
-                       navigator.webkitGetUserMedia ||
-                       navigator.mozGetUserMedia ||
-                       navigator.msGetUserMedia);
+    navigator.webkitGetUserMedia ||
+    navigator.mozGetUserMedia ||
+    navigator.msGetUserMedia);
 if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-    navigator.mediaDevices.getUserMedia({audio: true}).then((stream) => {
+    navigator.mediaDevices.getUserMedia({ audio: true }).then((stream) => {
         navigator.mediaDevices.enumerateDevices().then((devices) => {
             const fragment = document.createDocumentFragment();
             if (devices) {
@@ -792,12 +722,12 @@ if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
             devices_select.dispatchEvent(new Event('change'));
         });
     });
-}else{
+} else {
     $('#message-model .modal-body').html('This browser is not supported.');
     $('#message-model').modal('show');
 }
 
-function _file_select_change(){
+function _file_select_change() {
     var filename = file_select.value;
     report_status('Loading file ' + filename + '.');
     clear_playlist();
@@ -805,7 +735,7 @@ function _file_select_change(){
     if (filename.endsWith(ABC_EXT)) {
         $('#abc-textarea-container').hide();
         load_abc_file(filename);
-    } else if(filename.endsWith(PLS_EXT)) {
+    } else if (filename.endsWith(PLS_EXT)) {
         $('#abc-textarea-container').hide();
         load_playlist_file(filename);
     } else {
@@ -814,13 +744,14 @@ function _file_select_change(){
     }
     file_select.blur();
     Cookies.set(file_select.id, filename);
+
 }
 
 file_select.addEventListener('change', () => {
     _file_select_change();
 });
 
-function abc_textarea_change(){
+function abc_textarea_change() {
     load_abc_textarea();
 }
 
@@ -844,8 +775,6 @@ tune_button.addEventListener('click', () => {
 tempo_select.addEventListener('change', () => {
     if (loaded_abc) {
         load_abc(original_loaded_abc);
-        // Score is kept separately for each tempo, so we have to update our stats whenever the tempo changes.
-        update_score_stats_display();
     }
 });
 
@@ -870,7 +799,6 @@ reset_button.addEventListener('click', (event) => {
     } else {
         reset();
     }
-    update_score_display();
 });
 
 $(document).keypress(function (e) {
@@ -918,11 +846,6 @@ $(document).ready(function () {
     cb = parseInt(Cookies.get(ignore_duration.id));
     if (!isNaN(cb)) {
         $('#' + ignore_duration.id).prop('checked', cb);
-    }
-    // Load saved selected profile.
-    cb = Cookies.get(profile_select.id);
-    if (cb) {
-        profile_select.value = cb;
     }
     // Load saved selected file.
     cb = Cookies.get(file_select.id);
